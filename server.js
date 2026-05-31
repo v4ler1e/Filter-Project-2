@@ -1,76 +1,111 @@
-// server.js
-const express = require("express");
-const fs = require("fs");
+const express = require('express');
+const fs = require('fs');
 
 const app = express();
 const PORT = 3300;
 
-let allParts = [];
+let spareParts = [];
 
-// Ctenije dannyh iz faila i parsenie
-const data = fs.readFileSync("LE.txt", "utf-8");
-const lines = data.split("\n");
+function clearValue(value) {
+    return String(value ?? '').replaceAll('"', '').trim();
+}
 
-allParts = lines.map(line => {
-    const cols = line.split("\t");
+function toNumber(value) {
+    const fixedValue = clearValue(value).replace(',', '.');
+    return Number(fixedValue) || 0;
+}
 
-    if (cols.length < 9) return null;
+function getWarehouse(columns) {
+    return [2, 3, 4, 5, 6].reduce((sum, index) => {
+        return sum + toNumber(columns[index]);
+    }, 0);
+}
 
-    let sn = cols[0].replace(/"/g, "").trim();
-    let name = cols[1].replace(/"/g, "").trim();
-    let price = cols[8].replace(/"/g, "").trim();
+fs.readFile('LE.txt', 'utf8', (error, text) => {
+    if (error) {
+        console.error('Faili lugemisel tekkis viga:', error);
+        return;
+    }
 
-    price = parseFloat(price.replace(",", "."));
+    const rows = text.split('\n');
 
-    return { sn, name, price };
-}).filter(item => item !== null);
+    spareParts = rows
+        .filter(row => row.trim() !== '')
+        .map(row => {
+            const columns = row.split('\t');
 
-console.log("Загружено:", allParts.length);
+            const sn = clearValue(columns[0]);
+            const name = clearValue(columns[1]);
+            const warehouse = getWarehouse(columns);
 
-// Endpoint для получения запчастей с фильтрацией, сортировкой и пагинацией
-app.get("/spare-parts", (req, res) => {
-    let result = [...allParts];
+            // Pärast lao veerge on üks tühi veerg, seega hind tuleb järgmisest väärtusest.
+            const price = toNumber(columns[8]);
 
-    // Filtratsia
+            const info = {
+                brand: clearValue(columns[9]) || null,
+                salePrice: toNumber(columns[10])
+            };
+
+            return {
+                sn,
+                name,
+                warehouse,
+                price,
+                info
+            };
+        });
+
+    console.log(`Laetud ${spareParts.length} varuosa.`);
+});
+
+app.get('/spare-parts', (req, res) => {
+    let results = [...spareParts];
+
     if (req.query.name) {
-        const search = req.query.name.toLowerCase();
-        result = result.filter(p => p.name.toLowerCase().includes(search));
+        const nameText = req.query.name.toLowerCase();
+        results = results.filter(part => part.name.toLowerCase().includes(nameText));
     }
 
     if (req.query.sn) {
-        result = result.filter(p => p.sn === req.query.sn);
+        const snText = req.query.sn.toLowerCase();
+        results = results.filter(part => part.sn.toLowerCase().includes(snText));
     }
 
-    // Sortirovka
     if (req.query.sort) {
-        let field = req.query.sort;
-        let desc = false;
+        let sortBy = req.query.sort;
+        let reverse = false;
 
-        if (field.startsWith("-")) {
-            desc = true;
-            field = field.substring(1);
+        if (sortBy.startsWith('-')) {
+            reverse = true;
+            sortBy = sortBy.slice(1);
         }
 
-        result.sort((a, b) => {
-            if (a[field] < b[field]) return desc ? 1 : -1;
-            if (a[field] > b[field]) return desc ? -1 : 1;
-            return 0;
+        results.sort((a, b) => {
+            const valueA = a[sortBy];
+            const valueB = b[sortBy];
+
+            if (typeof valueA === 'number' && typeof valueB === 'number') {
+                return reverse ? valueB - valueA : valueA - valueB;
+            }
+
+            return reverse
+                ? String(valueB).localeCompare(String(valueA))
+                : String(valueA).localeCompare(String(valueB));
         });
     }
 
-    // Paginatsia
-    const page = parseInt(req.query.page) || 1;
-    const pageSize = 30;
+    const page = Number(req.query.page) || 1;
+    const limit = 30;
+    const start = (page - 1) * limit;
+    const data = results.slice(start, start + limit);
 
-    const start = (page - 1) * pageSize;
-    const end = start + pageSize;
-
-    result = result.slice(start, end);
-
-    res.json(result);
+    res.json({
+        totalFound: results.length,
+        currentPage: page,
+        data
+    });
 });
 
-// Zapusk servera
 app.listen(PORT, () => {
-    console.log(`Server töötab: http://localhost:${PORT}`);
+    console.log(`Server töötab aadressil http://localhost:${PORT}`);
 });
