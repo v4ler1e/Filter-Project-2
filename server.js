@@ -1,111 +1,138 @@
-const express = require('express');
-const fs = require('fs');
+const express = require("express");
+const fs = require("fs");
 
 const app = express();
 const PORT = 3300;
 
 let spareParts = [];
 
-function clearValue(value) {
-    return String(value ?? '').replaceAll('"', '').trim();
+function cleanValue(value) {
+    return String(value ?? "").replaceAll('"', "").trim();
 }
 
 function toNumber(value) {
-    const fixedValue = clearValue(value).replace(',', '.');
-    return Number(fixedValue) || 0;
+    const cleaned = cleanValue(value).replace(",", ".");
+    return Number(cleaned) || 0;
 }
 
-function getWarehouse(columns) {
-    return [2, 3, 4, 5, 6].reduce((sum, index) => {
-        return sum + toNumber(columns[index]);
-    }, 0);
+function makePart(columns) {
+    const sn = cleanValue(columns[0]);
+    const name = cleanValue(columns[1]);
+
+    const warehouses = {
+        Tallinn: toNumber(columns[2]),
+        Maardu: toNumber(columns[3]),
+        Tartu: toNumber(columns[4]),
+        Parnu: toNumber(columns[5]),
+        Paldiski: toNumber(columns[6])
+    };
+
+    const warehouse =
+        warehouses.Tallinn +
+        warehouses.Maardu +
+        warehouses.Tartu +
+        warehouses.Parnu +
+        warehouses.Paldiski;
+
+    const price = toNumber(columns[8]);
+
+    const info = {
+        brand: cleanValue(columns[9]),
+        salePrice: toNumber(columns[10])
+    };
+
+    return {
+        sn,
+        name,
+        warehouse,
+        warehouses,
+        price,
+        info
+    };
 }
 
-fs.readFile('LE.txt', 'utf8', (error, text) => {
+fs.readFile("LE.txt", "utf8", (error, data) => {
     if (error) {
-        console.error('Faili lugemisel tekkis viga:', error);
+        console.error("File reading error:", error);
         return;
     }
 
-    const rows = text.split('\n');
+    const lines = data.split("\n");
 
-    spareParts = rows
-        .filter(row => row.trim() !== '')
-        .map(row => {
-            const columns = row.split('\t');
+    spareParts = lines
+        .filter(line => line.trim() !== "")
+        .map(line => line.split("\t"))
+        .filter(columns => columns.length >= 11)
+        .map(makePart);
 
-            const sn = clearValue(columns[0]);
-            const name = clearValue(columns[1]);
-            const warehouse = getWarehouse(columns);
-
-            // Pärast lao veerge on üks tühi veerg, seega hind tuleb järgmisest väärtusest.
-            const price = toNumber(columns[8]);
-
-            const info = {
-                brand: clearValue(columns[9]) || null,
-                salePrice: toNumber(columns[10])
-            };
-
-            return {
-                sn,
-                name,
-                warehouse,
-                price,
-                info
-            };
-        });
-
-    console.log(`Laetud ${spareParts.length} varuosa.`);
+    console.log(`Loaded ${spareParts.length} spare parts`);
 });
 
-app.get('/spare-parts', (req, res) => {
+app.get("/spare-parts", (req, res) => {
     let results = [...spareParts];
 
     if (req.query.name) {
-        const nameText = req.query.name.toLowerCase();
-        results = results.filter(part => part.name.toLowerCase().includes(nameText));
+        const searchName = req.query.name.toLowerCase();
+        results = results.filter(part =>
+            part.name.toLowerCase().includes(searchName)
+        );
     }
 
     if (req.query.sn) {
-        const snText = req.query.sn.toLowerCase();
-        results = results.filter(part => part.sn.toLowerCase().includes(snText));
+        const searchSn = req.query.sn.toLowerCase();
+        results = results.filter(part =>
+            part.sn.toLowerCase().includes(searchSn)
+        );
+    }
+
+    if (req.query.city) {
+        const city = req.query.city;
+        results = results.filter(part =>
+            part.warehouses[city] !== undefined && part.warehouses[city] > 0
+        );
     }
 
     if (req.query.sort) {
-        let sortBy = req.query.sort;
-        let reverse = false;
+        let sortField = req.query.sort;
+        let isDescending = false;
 
-        if (sortBy.startsWith('-')) {
-            reverse = true;
-            sortBy = sortBy.slice(1);
+        if (sortField.startsWith("-")) {
+            isDescending = true;
+            sortField = sortField.substring(1);
         }
 
         results.sort((a, b) => {
-            const valueA = a[sortBy];
-            const valueB = b[sortBy];
+            let valueA = a[sortField];
+            let valueB = b[sortField];
 
-            if (typeof valueA === 'number' && typeof valueB === 'number') {
-                return reverse ? valueB - valueA : valueA - valueB;
+            if (typeof valueA === "number" && typeof valueB === "number") {
+                return isDescending ? valueB - valueA : valueA - valueB;
             }
 
-            return reverse
-                ? String(valueB).localeCompare(String(valueA))
-                : String(valueA).localeCompare(String(valueB));
+            valueA = String(valueA ?? "");
+            valueB = String(valueB ?? "");
+
+            return isDescending
+                ? valueB.localeCompare(valueA)
+                : valueA.localeCompare(valueB);
         });
     }
 
     const page = Number(req.query.page) || 1;
     const limit = 30;
-    const start = (page - 1) * limit;
-    const data = results.slice(start, start + limit);
+
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+
+    const paginatedResults = results.slice(startIndex, endIndex);
 
     res.json({
         totalFound: results.length,
         currentPage: page,
-        data
+        data: paginatedResults
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Server töötab aadressil http://localhost:${PORT}`);
+    console.log(`Server is running: http://localhost:${PORT}`);
 });
